@@ -5,7 +5,7 @@ import nest_asyncio
 import aiohttp
 import json
 import io
-from flask import Flask
+from flask import Flask, request
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -27,8 +27,9 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 XAI_API_KEY = os.getenv('XAI_API_KEY')
 GOOGLE_CREDENTIALS = os.getenv('GOOGLE_CREDENTIALS')
 GOOGLE_DRIVE_FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # e.g., https://your-render-url.onrender.com
 
-if not all([OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY, BOT_TOKEN, XAI_API_KEY, GOOGLE_CREDENTIALS, GOOGLE_DRIVE_FOLDER_ID]):
+if not all([OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY, BOT_TOKEN, XAI_API_KEY, GOOGLE_CREDENTIALS, GOOGLE_DRIVE_FOLDER_ID, WEBHOOK_URL]):
     raise ValueError("Missing one or more required environment variables. Check Render environment settings.")
 
 try:
@@ -48,6 +49,12 @@ app = Flask(__name__)
 @app.route('/')
 def home():
     return "🤖 AI Chat Bot is Running - Visit https://t.me/your_bot to chat!"
+
+@app.route('/webhook', methods=['POST'])
+async def webhook():
+    update = Update.de_json(await request.get_json(), application.bot)
+    await application.process_update(update)
+    return '', 200
 
 # === Conversation Memory with Google Drive Fallback ===
 class ConversationMemory:
@@ -242,7 +249,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
 
 # === Bot Setup ===
+application = None  # Global to be used in webhook
+
 async def telegram_bot():
+    global application
     try:
         application = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -251,9 +261,15 @@ async def telegram_bot():
 
         await application.initialize()
         await application.start()
-        print(">> Telegram bot started polling...")
-        await application.updater.start_polling()
-        await application.updater.idle()
+        print(">> Setting up webhook...")
+        await application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+        print(">> Webhook set. Bot is running...")
+        await application.run_webhook(
+            listen='0.0.0.0',
+            port=int(os.environ.get('PORT', 10000)),
+            url_path='/webhook',
+            webhook_url=f"{WEBHOOK_URL}/webhook"
+        )
     except Exception as e:
         print(f"Telegram Bot Error: {str(e)}")
 
@@ -277,3 +293,4 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         print("\n🔴 Shutting down...")
         loop.close()
+```
