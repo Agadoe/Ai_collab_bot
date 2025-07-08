@@ -27,7 +27,7 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 XAI_API_KEY = os.getenv('XAI_API_KEY')
 GOOGLE_CREDENTIALS = os.getenv('GOOGLE_CREDENTIALS')
 GOOGLE_DRIVE_FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # e.g., https://your-render-url.onrender.com
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # e.g., https://ai-collab-bot.onrender.com
 
 if not all([OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY, BOT_TOKEN, XAI_API_KEY, GOOGLE_CREDENTIALS, GOOGLE_DRIVE_FOLDER_ID, WEBHOOK_URL]):
     raise ValueError("Missing one or more required environment variables. Check Render environment settings.")
@@ -255,20 +255,28 @@ async def telegram_bot():
     global application
     try:
         application = ApplicationBuilder().token(BOT_TOKEN).build()
+        print(">> Application built successfully.")
 
         application.add_handler(CommandHandler('start', start))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        print(">> Handlers added successfully.")
 
         await application.initialize()
+        print(">> Application initialized.")
+
         await application.start()
-        print(">> Setting up webhook...")
-        await application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+        print(">> Application started.")
+
+        print(f">> Setting up webhook with URL: {WEBHOOK_URL}")
+        response = await application.bot.set_webhook(url=WEBHOOK_URL)
+        print(f">> Webhook set response: {response}")
         print(">> Webhook set. Bot is running...")
+
         await application.run_webhook(
             listen='0.0.0.0',
             port=int(os.environ.get('PORT', 10000)),
             url_path='/webhook',
-            webhook_url=f"{WEBHOOK_URL}/webhook"
+            webhook_url=WEBHOOK_URL
         )
     except Exception as e:
         print(f"Telegram Bot Error: {str(e)}")
@@ -284,12 +292,12 @@ if __name__ == '__main__':
     print(f"📡 Flask server running on port {port}")
 
     nest_asyncio.apply()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     try:
         print("🤖 Starting AI chatbot...")
-        loop.create_task(telegram_bot())
-        loop.run_forever()
+        loop.run_until_complete(telegram_bot())
     except KeyboardInterrupt:
         print("\n🔴 Shutting down...")
         loop.close()
