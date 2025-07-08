@@ -146,7 +146,11 @@ ENGINE_CONFIG = {
 # === AI Query Handler ===
 async def query_ai_engine(engine, user_id, prompt, context=None):
     config = ENGINE_CONFIG[engine]
-    api_key = globals()[f'{engine.upper()}_API_KEY']
+    api_key_var = f'{engine.upper()}_API_KEY'
+    api_key = os.getenv(api_key_var)
+    if not api_key:
+        print(f"Missing {api_key_var} environment variable. Skipping {engine.upper()}.")
+        return None
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -255,7 +259,7 @@ async def telegram_bot():
 
 # === Main Execution ===
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
+    port = int(os.environ.get('PORT', 10000))  # Match Render's detected port
     flask_thread = threading.Thread(
         target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False),
         daemon=True
