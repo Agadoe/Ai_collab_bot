@@ -9,7 +9,8 @@ telegram
 aiohttp
 telethon
 discord.py
-matrix-nio[e2e]openai
+matrix-nio[e2e]
+openai
 telegram
 aiohttp
 telethon
