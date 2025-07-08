@@ -1,7 +1,6 @@
 import os
 import threading
 import asyncio
-import nest_asyncio
 import aiohttp
 import json
 import io
@@ -272,6 +271,7 @@ async def telegram_bot():
         print(f">> Webhook set response: {response}")
         print(">> Webhook set. Bot is running...")
 
+        print(">> Starting webhook listener...")
         await application.run_webhook(
             listen='0.0.0.0',
             port=int(os.environ.get('PORT', 10000)),
@@ -291,13 +291,16 @@ if __name__ == '__main__':
     flask_thread.start()
     print(f"📡 Flask server running on port {port}")
 
-    nest_asyncio.apply()
+    # Remove nest_asyncio.apply()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    async def run_bot():
+        await telegram_bot()
+
     try:
         print("🤖 Starting AI chatbot...")
-        loop.run_until_complete(telegram_bot())
+        loop.run_until_complete(run_bot())
     except KeyboardInterrupt:
         print("\n🔴 Shutting down...")
         loop.close()
