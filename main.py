@@ -3,6 +3,7 @@ import threading
 import asyncio
 import nest_asyncio
 import aiohttp
+import json
 from flask import Flask
 from telegram import Update
 from telegram.ext import (
@@ -12,9 +13,9 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
-from discord.ext import commands
-from discord import Intents
-from nio import AsyncClient, RoomMessageText
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 # === Environment Variables ===
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -22,32 +23,74 @@ GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-MATRIX_ACCESS_TOKEN = os.getenv('MATRIX_ACCESS_TOKEN')
-MATRIX_HOMESERVER = os.getenv('MATRIX_HOMESERVER', 'https://matrix.org')
 XAI_API_KEY = os.getenv('XAI_API_KEY')
+GOOGLE_CREDENTIALS = os.getenv('GOOGLE_CREDENTIALS')  # Base64-encoded credentials.json
+GOOGLE_DRIVE_FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID')
 
-if not all([OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY, BOT_TOKEN, XAI_API_KEY]):
+if not all([OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY, BOT_TOKEN, XAI_API_KEY, GOOGLE_CREDENTIALS, GOOGLE_DRIVE_FOLDER_ID]):
     raise ValueError("Missing one or more required environment variables.")
+
+# Decode credentials
+credentials_dict = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+credentials = Credentials.from_service_account_info(credentials_dict)
+drive_service = build('drive', 'v3', credentials=credentials)
 
 # === Flask Server Setup ===
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🤖 AI Chat Bot is Running - Visit https://t.me/your_bot, Discord, or Matrix to chat!"
+    return "🤖 AI Chat Bot is Running - Visit https://t.me/your_bot to chat!"
 
-# === Conversation Memory ===
+# === Conversation Memory with Google Drive ===
 class ConversationMemory:
     def __init__(self, max_history=5):
         self.history = {}
         self.max_history = max_history
+        self._load_from_drive()
+
+    def _load_from_drive(self):
+        try:
+            query = f"'{GOOGLE_DRIVE_FOLDER_ID}' in parents"
+            results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+            for file in results.get('files', []):
+                if file['name'].startswith('chat_history_'):
+                    file_id = file['id']
+                    request = drive_service.files().get_media(fileId=file_id)
+                    fh = request.execute()
+                    user_id = file['name'].replace('chat_history_', '').replace('.json', '')
+                    self.history[user_id] = json.loads(fh)
+        except Exception as e:
+            print(f"Error loading from Drive: {str(e)}")
+
+    def _save_to_drive(self, user_id):
+        history_data = self.history.get(user_id, [])
+        file_metadata = {
+            'name': f'chat_history_{user_id}.json',
+            'parents': [GOOGLE_DRIVE_FOLDER_ID]
+        }
+        media = MediaFileUpload(
+            io.BytesIO(json.dumps(history_data).encode()),
+            mimetype='application/json',
+            resumable=True
+        )
+        try:
+            query = f"name='chat_history_{user_id}.json' and '{GOOGLE_DRIVE_FOLDER_ID}' in parents"
+            results = drive_service.files().list(q=query, fields="files(id)").execute()
+            if results.get('files', []):
+                file_id = results['files'][0]['id']
+                drive_service.files().update(fileId=file_id, media_body=media).execute()
+            else:
+                drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        except Exception as e:
+            print(f"Error saving to Drive: {str(e)}")
 
     def add_message(self, user_id, role, content):
         if user_id not in self.history:
             self.history[user_id] = []
         self.history[user_id].append({"role": role, "content": content})
         self.history[user_id] = self.history[user_id][-self.max_history:]
+        self._save_to_drive(user_id)
 
 conversation_memory = ConversationMemory()
 
@@ -176,6 +219,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(response)
 
+# === Bot Setup ===
 async def telegram_bot():
     try:
         application = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -191,75 +235,6 @@ async def telegram_bot():
     except Exception as e:
         print(f"Telegram Bot Error: {str(e)}")
 
-# === Discord Bot Setup ===
-intents = Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-@bot.event
-async def on_ready():
-    print(f'>> Discord bot {bot.user} has connected!')
-
-@bot.event
-async def on_message(message):
-    if message.author == bot.user:
-        return
-    user_id = message.author.id
-    prompt = message.content
-    conversation_memory.add_message(user_id, "user", prompt)
-
-    if "work together" in prompt.lower():
-        response = await manage_collaborative_task(user_id, prompt)
-    else:
-        engines = ['openai', 'groq', 'openrouter', 'deepseek', 'grok']
-        response = None
-        for engine in engines:
-            response = await query_ai_engine(engine, user_id, prompt)
-            if response:
-                conversation_memory.add_message(user_id, "assistant", response)
-                break
-        if not response:
-            response = "⚠️ All systems busy. Please try again."
-
-    await message.channel.send(response)
-
-# === Matrix Handler ===
-async def matrix_handler():
-    if not MATRIX_ACCESS_TOKEN:
-        print("Matrix token not set. Skipping...")
-        return
-    client = AsyncClient(MATRIX_HOMESERVER, "your-bot-user")  # Replace with your bot user ID
-    client.access_token = MATRIX_ACCESS_TOKEN
-    client.next_batch = None
-
-    async def message_callback(room, event):
-        user_id = event.sender
-        prompt = event.body
-        if user_id and prompt and not event.sender.startswith("@your-bot-user"):  # Avoid self-response
-            conversation_memory.add_message(user_id, "user", prompt)
-
-            if "work together" in prompt.lower():
-                response = await manage_collaborative_task(user_id, prompt)
-            else:
-                engines = ['openai', 'groq', 'openrouter', 'deepseek', 'grok']
-                response = None
-                for engine in engines:
-                    response = await query_ai_engine(engine, user_id, prompt)
-                    if response:
-                        conversation_memory.add_message(user_id, "assistant", response)
-                        break
-                if not response:
-                    response = "⚠️ All systems busy. Please try again."
-
-            await client.room_send(
-                room.room_id,
-                message_type="m.room.message",
-                content={"msgtype": "m.text", "body": response}
-            )
-
-    client.add_event_callback(message_callback, RoomMessageText)
-    await client.sync_forever(timeout=30000)
-
 # === Main Execution ===
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
@@ -273,18 +248,10 @@ if __name__ == '__main__':
     nest_asyncio.apply()
     loop = asyncio.get_event_loop()
 
-    if DISCORD_BOT_TOKEN:
-        loop.create_task(bot.start(DISCORD_BOT_TOKEN))
-
-    if MATRIX_ACCESS_TOKEN:
-        loop.create_task(matrix_handler())
-
     try:
         print("🤖 Starting AI chatbot...")
         loop.create_task(telegram_bot())
         loop.run_forever()
     except KeyboardInterrupt:
         print("\n🔴 Shutting down...")
-        if DISCORD_BOT_TOKEN:
-            loop.create_task(bot.close())
         loop.close()
