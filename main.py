@@ -4,6 +4,7 @@ import asyncio
 import nest_asyncio
 import aiohttp
 import json
+import io
 from flask import Flask
 from telegram import Update
 from telegram.ext import (
@@ -24,16 +25,22 @@ OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 XAI_API_KEY = os.getenv('XAI_API_KEY')
-GOOGLE_CREDENTIALS = os.getenv('GOOGLE_CREDENTIALS')  # Base64-encoded credentials.json
+GOOGLE_CREDENTIALS = os.getenv('GOOGLE_CREDENTIALS')
 GOOGLE_DRIVE_FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID')
 
 if not all([OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY, BOT_TOKEN, XAI_API_KEY, GOOGLE_CREDENTIALS, GOOGLE_DRIVE_FOLDER_ID]):
-    raise ValueError("Missing one or more required environment variables.")
+    raise ValueError("Missing one or more required environment variables. Check Render environment settings.")
 
-# Decode credentials
-credentials_dict = json.loads(os.environ['GOOGLE_CREDENTIALS'])
-credentials = Credentials.from_service_account_info(credentials_dict)
-drive_service = build('drive', 'v3', credentials=credentials)
+try:
+    credentials_dict = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+    credentials = Credentials.from_service_account_info(credentials_dict)
+    drive_service = build('drive', 'v3', credentials=credentials)
+except json.JSONDecodeError as e:
+    print(f"Invalid GOOGLE_CREDENTIALS format: {str(e)}. Falling back to in-memory storage.")
+    drive_service = None
+except Exception as e:
+    print(f"Google Drive setup error: {str(e)}. Falling back to in-memory storage.")
+    drive_service = None
 
 # === Flask Server Setup ===
 app = Flask(__name__)
@@ -42,12 +49,13 @@ app = Flask(__name__)
 def home():
     return "🤖 AI Chat Bot is Running - Visit https://t.me/your_bot to chat!"
 
-# === Conversation Memory with Google Drive ===
+# === Conversation Memory with Google Drive Fallback ===
 class ConversationMemory:
     def __init__(self, max_history=5):
         self.history = {}
         self.max_history = max_history
-        self._load_from_drive()
+        if drive_service:
+            self._load_from_drive()
 
     def _load_from_drive(self):
         try:
@@ -64,6 +72,8 @@ class ConversationMemory:
             print(f"Error loading from Drive: {str(e)}")
 
     def _save_to_drive(self, user_id):
+        if not drive_service:
+            return
         history_data = self.history.get(user_id, [])
         file_metadata = {
             'name': f'chat_history_{user_id}.json',
@@ -167,6 +177,7 @@ async def query_ai_engine(engine, user_id, prompt, context=None):
                 timeout=aiohttp.ClientTimeout(total=15)
             ) as resp:
                 if resp.status != 200:
+                    print(f"{engine.upper()} API error: Status {resp.status}")
                     return None
                 data = await resp.json()
                 return data['choices'][0]['message']['content']
@@ -183,13 +194,17 @@ async def manage_collaborative_task(user_id, prompt):
         response = await query_ai_engine(engine, user_id, prompt)
         if response:
             responses[engine] = response
+            print(f"{engine.upper()} collaborated: {response[:50]}...")
+
+    if not responses:
+        return "⚠️ No AI responses available for collaboration. Please try again."
 
     context = " ".join([f"{k}: {v}" for k, v in responses.items()])
     final_response = await query_ai_engine('grok', user_id, "Synthesize the following inputs into a perfect solution:", context)
     if final_response:
         conversation_memory.add_message(user_id, "assistant", final_response)
         return final_response
-    return "⚠️ Collaboration failed. Please try again."
+    return f"⚠️ Synthesis failed, but here are raw inputs: {context[:200]}..."  # Fallback with partial context
 
 # === Telegram Handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -208,14 +223,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await manage_collaborative_task(user_id, user_message)
     else:
         engines = ['openai', 'groq', 'openrouter', 'deepseek', 'grok']
-        response = None
+        responses = {}
         for engine in engines:
             response = await query_ai_engine(engine, user_id, user_message)
             if response:
+                responses[engine] = response
                 conversation_memory.add_message(user_id, "assistant", response)
-                break
-        if not response:
+                print(f"{engine.upper()} responded: {response[:50]}...")  # Log first 50 chars
+        if not responses:
             response = "⚠️ All systems busy. Please try again."
+        else:
+            response = responses[list(responses.keys())[0]]  # Use first successful response
 
     await update.message.reply_text(response)
 
