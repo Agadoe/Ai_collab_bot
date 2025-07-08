@@ -1,0 +1,15 @@
+nest_asyncio
+python-telegram-bot==20.0
+Flask
+nest_asyncio
+python-telegram-bot==20.0
+Flask
+openai
+telegram
+aiohttp
+telethon
+discord.py
+matrix-nio[e2e]openai
+telegram
+aiohttp
+telethon

@@ -1,0 +1,17 @@
+[project]
+name = "ai-collaboration-bot"
+version = "0.2.0"
+description = "A multi-engine AI chatbot with collaborative capabilities"
+authors = ["Your Name <you@example.com>"]
+requires-python = ">=3.11"
+dependencies = [
+    "nest_asyncio",
+    "python-telegram-bot==20.0",
+    "Flask",
+    "openai",
+    "telegram",
+    "aiohttp",
+    "telethon",
+    "discord.py",
+    "matrix-nio[e2e]"
+]
