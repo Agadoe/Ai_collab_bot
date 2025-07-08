@@ -1,9 +1,6 @@
 import os
-import threading
 import asyncio
 import aiohttp
-import json
-import io
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import (
@@ -13,9 +10,8 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from telethon import TelegramClient
+from telethon.tl.functions.messages import GetHistoryRequest
 
 # === Environment Variables ===
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -24,23 +20,13 @@ OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 XAI_API_KEY = os.getenv('XAI_API_KEY')
-GOOGLE_CREDENTIALS = os.getenv('GOOGLE_CREDENTIALS')
-GOOGLE_DRIVE_FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID')
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # e.g., https://ai-collab-bot.onrender.com
+API_ID = os.getenv('API_ID')  # Telegram API ID from my.telegram.org
+API_HASH = os.getenv('API_HASH')  # Telegram API Hash from my.telegram.org
+PHONE = os.getenv('PHONE')  # Your phone number with country code, e.g., +1234567890
 
-if not all([OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY, BOT_TOKEN, XAI_API_KEY, GOOGLE_CREDENTIALS, GOOGLE_DRIVE_FOLDER_ID, WEBHOOK_URL]):
+if not all([OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY, BOT_TOKEN, XAI_API_KEY, WEBHOOK_URL, API_ID, API_HASH, PHONE]):
     raise ValueError("Missing one or more required environment variables. Check Render environment settings.")
-
-try:
-    credentials_dict = json.loads(os.environ['GOOGLE_CREDENTIALS'])
-    credentials = Credentials.from_service_account_info(credentials_dict)
-    drive_service = build('drive', 'v3', credentials=credentials)
-except json.JSONDecodeError as e:
-    print(f"Invalid GOOGLE_CREDENTIALS format: {str(e)}. Falling back to in-memory storage.")
-    drive_service = None
-except Exception as e:
-    print(f"Google Drive setup error: {str(e)}. Falling back to in-memory storage.")
-    drive_service = None
 
 # === Flask Server Setup ===
 app = Flask(__name__)
@@ -55,60 +41,8 @@ async def webhook():
     await application.process_update(update)
     return '', 200
 
-# === Conversation Memory with Google Drive Fallback ===
-class ConversationMemory:
-    def __init__(self, max_history=5):
-        self.history = {}
-        self.max_history = max_history
-        if drive_service:
-            self._load_from_drive()
-
-    def _load_from_drive(self):
-        try:
-            query = f"'{GOOGLE_DRIVE_FOLDER_ID}' in parents"
-            results = drive_service.files().list(q=query, fields="files(id, name)").execute()
-            for file in results.get('files', []):
-                if file['name'].startswith('chat_history_'):
-                    file_id = file['id']
-                    request = drive_service.files().get_media(fileId=file_id)
-                    fh = request.execute()
-                    user_id = file['name'].replace('chat_history_', '').replace('.json', '')
-                    self.history[user_id] = json.loads(fh)
-        except Exception as e:
-            print(f"Error loading from Drive: {str(e)}")
-
-    def _save_to_drive(self, user_id):
-        if not drive_service:
-            return
-        history_data = self.history.get(user_id, [])
-        file_metadata = {
-            'name': f'chat_history_{user_id}.json',
-            'parents': [GOOGLE_DRIVE_FOLDER_ID]
-        }
-        media = MediaFileUpload(
-            io.BytesIO(json.dumps(history_data).encode()),
-            mimetype='application/json',
-            resumable=True
-        )
-        try:
-            query = f"name='chat_history_{user_id}.json' and '{GOOGLE_DRIVE_FOLDER_ID}' in parents"
-            results = drive_service.files().list(q=query, fields="files(id)").execute()
-            if results.get('files', []):
-                file_id = results['files'][0]['id']
-                drive_service.files().update(fileId=file_id, media_body=media).execute()
-            else:
-                drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        except Exception as e:
-            print(f"Error saving to Drive: {str(e)}")
-
-    def add_message(self, user_id, role, content):
-        if user_id not in self.history:
-            self.history[user_id] = []
-        self.history[user_id].append({"role": role, "content": content})
-        self.history[user_id] = self.history[user_id][-self.max_history:]
-        self._save_to_drive(user_id)
-
-conversation_memory = ConversationMemory()
+# === Telegram Client Setup ===
+client = TelegramClient('session_name', API_ID, API_HASH)
 
 # === AI Engine Configuration ===
 ENGINE_CONFIG = {
@@ -150,7 +84,7 @@ ENGINE_CONFIG = {
 }
 
 # === AI Query Handler ===
-async def query_ai_engine(engine, user_id, prompt, context=None):
+async def query_ai_engine(engine, prompt):
     config = ENGINE_CONFIG[engine]
     api_key_var = f'{engine.upper()}_API_KEY'
     api_key = os.getenv(api_key_var)
@@ -165,11 +99,8 @@ async def query_ai_engine(engine, user_id, prompt, context=None):
 
     messages = [
         {"role": "system", "content": config['system_message']},
-        *conversation_memory.history.get(user_id, []),
         {"role": "user", "content": prompt}
     ]
-    if context:
-        messages.append({"role": "assistant", "content": f"Context from other AIs: {context}"})
 
     json_data = {
         "model": config['model'],
@@ -196,12 +127,12 @@ async def query_ai_engine(engine, user_id, prompt, context=None):
             return None
 
 # === Collaborative Project Manager ===
-async def manage_collaborative_task(user_id, prompt):
+async def manage_collaborative_task(prompt):
     engines = ['openai', 'groq', 'openrouter', 'deepseek', 'grok']
     responses = {}
 
     for engine in engines:
-        response = await query_ai_engine(engine, user_id, prompt)
+        response = await query_ai_engine(engine, prompt)
         if response:
             responses[engine] = response
             print(f"{engine.upper()} collaborated: {response[:50]}...")
@@ -210,9 +141,8 @@ async def manage_collaborative_task(user_id, prompt):
         return "⚠️ No AI responses available for collaboration. Please try again."
 
     context = " ".join([f"{k}: {v}" for k, v in responses.items()])
-    final_response = await query_ai_engine('grok', user_id, "Synthesize the following inputs into a perfect solution:", context)
+    final_response = await query_ai_engine('grok', "Synthesize the following inputs into a perfect solution:" + context)
     if final_response:
-        conversation_memory.add_message(user_id, "assistant", final_response)
         return final_response
     return f"⚠️ Synthesis failed, but here are raw inputs: {context[:200]}..."  # Fallback with partial context
 
@@ -220,25 +150,22 @@ async def manage_collaborative_task(user_id, prompt):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🌟 Hello! I'm an advanced AI bot with collaborative AI engines.\n"
-        "Send a message or project idea, and we'll work together to perfect it!"
+        "Send a message or project idea, and we'll work together to perfect it!\n"
+        "Use /scrape [chat_link] to scrape a Telegram chat."
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
     user_message = update.message.text
 
-    conversation_memory.add_message(user_id, "user", user_message)
-
     if "work together" in user_message.lower():
-        response = await manage_collaborative_task(user_id, user_message)
+        response = await manage_collaborative_task(user_message)
     else:
         engines = ['openai', 'groq', 'openrouter', 'deepseek', 'grok']
         responses = {}
         for engine in engines:
-            response = await query_ai_engine(engine, user_id, user_message)
+            response = await query_ai_engine(engine, user_message)
             if response:
                 responses[engine] = response
-                conversation_memory.add_message(user_id, "assistant", response)
                 print(f"{engine.upper()} responded: {response[:50]}...")  # Log first 50 chars
         if not responses:
             response = "⚠️ All systems busy. Please try again."
@@ -246,6 +173,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response = responses[list(responses.keys())[0]]  # Use first successful response
 
     await update.message.reply_text(response)
+
+async def scrape(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Please provide a chat link or username, e.g., /scrape https://t.me/example")
+        return
+
+    chat_input = context.args[0]
+    try:
+        await client.start(PHONE)
+        target = await client.get_entity(chat_input)
+        history = await client(GetHistoryRequest(
+            peer=target,
+            limit=100,  # Adjust limit as needed
+            offset_date=None,
+            offset_id=0,
+            max_id=0,
+            min_id=0,
+            add_offset=0
+        ))
+        messages = [msg.message for msg in history.messages if hasattr(msg, 'message')]
+        result = f"Scraped {len(messages)} messages from {chat_input}:\n" + "\n".join(messages[:10])  # Show first 10
+        await update.message.reply_text(result)
+    except Exception as e:
+        await update.message.reply_text(f"Scraping failed: {str(e)}")
+    finally:
+        await client.disconnect()
 
 # === Bot Setup ===
 application = None  # Global to be used in webhook
@@ -258,6 +211,7 @@ async def telegram_bot():
 
         application.add_handler(CommandHandler('start', start))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(CommandHandler('scrape', scrape))
         print(">> Handlers added successfully.")
 
         await application.initialize()
@@ -271,36 +225,20 @@ async def telegram_bot():
         print(f">> Webhook set response: {response}")
         print(">> Webhook set. Bot is running...")
 
-        print(">> Starting webhook listener...")
         await application.run_webhook(
             listen='0.0.0.0',
-            port=int(os.environ.get('PORT', 10000)),
+            port=port,
             url_path='/webhook',
             webhook_url=WEBHOOK_URL
         )
     except Exception as e:
         print(f"Telegram Bot Error: {str(e)}")
+        if application:
+            await application.stop()
 
 # === Main Execution ===
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))  # Match Render's detected port
-    flask_thread = threading.Thread(
-        target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False),
-        daemon=True
-    )
-    flask_thread.start()
     print(f"📡 Flask server running on port {port}")
 
-    # Remove nest_asyncio.apply()
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    async def run_bot():
-        await telegram_bot()
-
-    try:
-        print("🤖 Starting AI chatbot...")
-        loop.run_until_complete(run_bot())
-    except KeyboardInterrupt:
-        print("\n🔴 Shutting down...")
-        loop.close()
+    app.run(host='0.0.0.0', port=port, use_reloader=False)

@@ -1,9 +1,10 @@
 nest_asyncio
-python-telegram-bot==20.0
-Flask
+flask[async]
 openai
 telegram
 aiohttp
+openroutere
+deepseek
+xai
 telethon
-google-auth
-google-api-python-client
+
