@@ -1,7 +1,6 @@
 import os
-import logging
 import asyncio
-import threading
+from dotenv import load_dotenv
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import (
@@ -11,77 +10,68 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-from dotenv import load_dotenv
+from telethon import TelegramClient
 
-# Load environment variables
+# Load .env variables
 load_dotenv()
 
+# ENV Variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-app.onrender.com/webhook")
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+PORT = int(os.getenv("PORT", "10000"))
 
-# Logging setup
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+# Flask app setup
+flask_app = Flask(__name__)
 
-app = Flask(__name__)
-application = None  # Will hold the telegram application instance
+@flask_app.route("/", methods=["GET"])
+def index():
+    return "Bot is alive!"
 
-# Example command handler
+@flask_app.route("/webhook", methods=["POST"])
+def webhook():
+    return "Webhook received", 200
+
+# Telethon setup
+telethon_client = TelegramClient("anon", API_ID, API_HASH)
+
+# Telegram bot handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! Bot is up and running.")
+    await update.message.reply_text("Hello! I'm your AI collab bot.")
 
-# Main Telegram bot setup
-async def telegram_bot():
-    global application
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(update.message.text)
+
+# Telegram bot setup
+async def run_telegram_bot():
     application = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
         .build()
     )
 
-    # Add handlers
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-    print(">> Handlers added successfully.")
     print(">> Bot started.")
     await application.initialize()
-
-    # Set webhook
+    await application.start()
     await application.bot.set_webhook(WEBHOOK_URL)
     print(f">> Webhook set to {WEBHOOK_URL}")
-
-    # Start webhook mode
-    await application.start()
-    await application.updater.start_webhook(
+    await application.updater.start_polling()  # fallback polling if needed
+    await application.run_webhook(
         listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 10000)),
-        url_path="/webhook",
-        webhook_url=WEBHOOK_URL
+        port=PORT,
+        webhook_url=WEBHOOK_URL,
     )
 
-# Flask webhook route
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if request.method == "POST":
-        data = request.get_json(force=True)
-        update = Update.de_json(data, application.bot)
-        asyncio.create_task(application.process_update(update))
-    return "OK"
+# Run everything concurrently
+async def main():
+    print("📡 Flask server running on port", PORT)
+    flask_task = asyncio.create_task(asyncio.to_thread(flask_app.run, host="0.0.0.0", port=PORT))
+    bot_task = asyncio.create_task(run_telegram_bot())
+    await asyncio.gather(flask_task, bot_task)
 
-# Flask server route
-@app.route('/')
-def index():
-    return "✅ Flask server is up!"
-
-# Run both Flask and bot
-if __name__ == '__main__':
-    def start_bot():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(telegram_bot())
-
-    threading.Thread(target=start_bot).start()
-    print("📡 Flask server running on port 10000")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+if __name__ == "__main__":
+    asyncio.run(main())
