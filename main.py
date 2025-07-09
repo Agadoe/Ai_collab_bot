@@ -20,15 +20,15 @@ OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 XAI_API_KEY = os.getenv('XAI_API_KEY')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # e.g., https://ai-collab-bot.onrender.com
-API_ID = os.getenv('API_ID')  # Telegram API ID from my.telegram.org
-API_HASH = os.getenv('API_HASH')  # Telegram API Hash from my.telegram.org
-PHONE = os.getenv('PHONE')  # Your phone number with country code, e.g., +1234567890
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+API_ID = os.getenv('API_ID')
+API_HASH = os.getenv('API_HASH')
+PHONE = os.getenv('PHONE')
 
 if not all([OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY, XAI_API_KEY, BOT_TOKEN, WEBHOOK_URL, API_ID, API_HASH, PHONE]):
     raise ValueError("Missing one or more required environment variables. Check Render environment settings.")
 
-# === Flask Server Setup ===
+# === Flask App ===
 app = Flask(__name__)
 
 @app.route('/')
@@ -36,15 +36,15 @@ def home():
     return "🤖 AI Chat Bot is Running - Visit https://t.me/your_bot to chat!"
 
 @app.route('/webhook', methods=['POST'])
-async def webhook():
-    data = request.get_json()  # Get JSON data synchronously
+def webhook():
+    data = request.get_json()
     if not data:
         return '', 400
-    update = Update.de_json(data, application.bot)  # Use the data directly
-    await application.process_update(update)
+    update = Update.de_json(data, application.bot)
+    asyncio.create_task(application.process_update(update))
     return '', 200
 
-# === Telegram Client Setup ===
+# === Telethon Client ===
 client = TelegramClient('session_name', API_ID, API_HASH)
 
 # === AI Engine Configuration ===
@@ -92,7 +92,7 @@ async def query_ai_engine(engine, prompt):
     api_key_var = f'{engine.upper()}_API_KEY'
     api_key = os.getenv(api_key_var)
     if not api_key:
-        print(f"Missing {api_key_var} environment variable. Skipping {engine.upper()}.")
+        print(f"Missing {api_key_var}. Skipping {engine}.")
         return None
 
     headers = {
@@ -109,17 +109,12 @@ async def query_ai_engine(engine, prompt):
         "model": config['model'],
         "messages": messages,
         "temperature": config['temperature'],
-        'max_tokens': config['max_tokens']
+        "max_tokens": config['max_tokens']
     }
 
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(
-                config['url'],
-                headers=headers,
-                json=json_data,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
+            async with session.post(config['url'], headers=headers, json=json_data, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status != 200:
                     print(f"{engine.upper()} API error: Status {resp.status}")
                     return None
@@ -129,7 +124,7 @@ async def query_ai_engine(engine, prompt):
             print(f"{engine.upper()} Error: {str(e)}")
             return None
 
-# === Collaborative Project Manager ===
+# === Collaborative Task Manager ===
 async def manage_collaborative_task(prompt):
     engines = ['openai', 'groq', 'openrouter', 'deepseek', 'grok']
     responses = {}
@@ -141,13 +136,11 @@ async def manage_collaborative_task(prompt):
             print(f"{engine.upper()} collaborated: {response[:50]}...")
 
     if not responses:
-        return "⚠️ No AI responses available for collaboration. Please try again."
+        return "⚠️ No AI responses available for collaboration."
 
     context = " ".join([f"{k}: {v}" for k, v in responses.items()])
-    final_response = await query_ai_engine('grok', "Synthesize the following inputs into a perfect solution:" + context)
-    if final_response:
-        return final_response
-    return f"⚠️ Synthesis failed, but here are raw inputs: {context[:200]}..."  # Fallback with partial context
+    final_response = await query_ai_engine('grok', "Synthesize the following inputs into a perfect solution: " + context)
+    return final_response or f"⚠️ Synthesis failed. Here are raw inputs: {context[:200]}..."
 
 # === Telegram Handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -159,7 +152,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
-
     if "work together" in user_message.lower():
         response = await manage_collaborative_task(user_message)
     else:
@@ -169,12 +161,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response = await query_ai_engine(engine, user_message)
             if response:
                 responses[engine] = response
-                print(f"{engine.upper()} responded: {response[:50]}...")  # Log first 50 chars
-        if not responses:
-            response = "⚠️ All systems busy. Please try again."
-        else:
-            response = responses[list(responses.keys())[0]]  # Use first successful response
-
+                print(f"{engine.upper()} responded: {response[:50]}...")
+        response = responses.get(next(iter(responses)), "⚠️ All systems busy. Please try again.")
     await update.message.reply_text(response)
 
 async def scrape(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,7 +176,7 @@ async def scrape(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = await client.get_entity(chat_input)
         history = await client(GetHistoryRequest(
             peer=target,
-            limit=100,  # Adjust limit as needed
+            limit=100,
             offset_date=None,
             offset_id=0,
             max_id=0,
@@ -196,7 +184,7 @@ async def scrape(update: Update, context: ContextTypes.DEFAULT_TYPE):
             add_offset=0
         ))
         messages = [msg.message for msg in history.messages if hasattr(msg, 'message')]
-        result = f"Scraped {len(messages)} messages from {chat_input}:\n" + "\n".join(messages[:10])  # Show first 10
+        result = f"Scraped {len(messages)} messages:\n" + "\n".join(messages[:10])
         await update.message.reply_text(result)
     except Exception as e:
         await update.message.reply_text(f"Scraping failed: {str(e)}")
@@ -204,47 +192,38 @@ async def scrape(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await client.disconnect()
 
 # === Bot Setup ===
-application = None  # Global to be used in webhook
+application = None
 
 async def telegram_bot():
     global application
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    print(">> Application built successfully.")
+
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CommandHandler('scrape', scrape))
+    print(">> Handlers added successfully.")
+
+    await application.initialize()
+    await application.start()
+    print(">> Bot started.")
+
+    await application.bot.set_webhook(url=WEBHOOK_URL)
+    print(f">> Webhook set to {WEBHOOK_URL}")
+
+    port = int(os.environ.get('PORT', 10000))
     try:
-        application = ApplicationBuilder().token(BOT_TOKEN).build()
-        print(">> Application built successfully.")
-
-        application.add_handler(CommandHandler('start', start))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        application.add_handler(CommandHandler('scrape', scrape))
-        print(">> Handlers added successfully.")
-
-        await application.initialize()
-        print(">> Application initialized.")
-
-        await application.start()
-        print(">> Application started.")
-
-        print(f">> Setting up webhook with URL: {WEBHOOK_URL}")
-        response = await application.bot.set_webhook(url=WEBHOOK_URL)
-        print(f">> Webhook set response: {response}")
-        print(">> Webhook set. Bot is running...")
-
-        # Run the webhook server within this coroutine
         await application.run_webhook(
             listen='0.0.0.0',
             port=port,
             url_path='/webhook',
             webhook_url=WEBHOOK_URL
         )
-    except Exception as e:
-        print(f"Telegram Bot Error: {str(e)}")
-        if application:
-            await application.stop()
+    finally:
+        await application.stop()
+        print(">> Bot stopped.")
 
-# === Main Execution ===
+# === Entrypoint ===
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))  # Match Render's detected port
-    print(f"📡 Flask server running on port {port}")
-
-    # Run the bot asynchronously
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(telegram_bot())
+    print(f"📡 Flask server running on port {os.environ.get('PORT', 10000)}")
+    asyncio.run(telegram_bot())
