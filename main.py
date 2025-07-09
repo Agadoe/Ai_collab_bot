@@ -37,7 +37,10 @@ def home():
 
 @app.route('/webhook', methods=['POST'])
 async def webhook():
-    update = Update.de_json(await request.get_json(), application.bot)
+    data = request.get_json()  # Get JSON data synchronously
+    if not data:
+        return '', 400
+    update = Update.de_json(data, application.bot)  # Use the data directly
     await application.process_update(update)
     return '', 200
 
@@ -225,6 +228,7 @@ async def telegram_bot():
         print(f">> Webhook set response: {response}")
         print(">> Webhook set. Bot is running...")
 
+        # Run the webhook server within this coroutine
         await application.run_webhook(
             listen='0.0.0.0',
             port=port,
@@ -241,4 +245,6 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))  # Match Render's detected port
     print(f"📡 Flask server running on port {port}")
 
-    app.run(host='0.0.0.0', port=port, use_reloader=False)
+    # Run the bot asynchronously
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(telegram_bot())
