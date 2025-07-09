@@ -3,8 +3,6 @@ python-telegram-bot==20.0
 aiohttp==3.9.5
 openai==1.35.3
 groq==0.4.2
-openrouter==0.6.0
-deepseek==0.0.1  # Note: Verify this package exists or replace with direct API calls if unavailable
-xai==0.0.1  # Note: Verify this package or use xAI API directly if unavailable
+openrouter==1.0
 telethon==1.35.0
 setuptools==70.0.0
