@@ -5,3 +5,5 @@ openai==1.35.3
 telethon==1.35.0
 setuptools==70.0.0
 python-dotenv
+transformers
+

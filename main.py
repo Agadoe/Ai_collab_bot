@@ -1,77 +1,121 @@
 import os
 import asyncio
-from dotenv import load_dotenv
+import aiohttp
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
+    MessageHandler,
     CommandHandler,
     ContextTypes,
-    MessageHandler,
-    filters,
+    filters
 )
 from telethon import TelegramClient
+from telethon.tl.functions.messages import GetHistoryRequest
 
-# Load .env variables
-load_dotenv()
+# === Environment Variables ===
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+XAI_API_KEY = os.getenv('XAI_API_KEY')
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+API_ID = os.getenv('API_ID')
+API_HASH = os.getenv('API_HASH')
+PHONE = os.getenv('PHONE')
 
-# ENV Variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.getenv("PORT", "10000"))
+if not all([OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY, XAI_API_KEY, BOT_TOKEN, WEBHOOK_URL, API_ID, API_HASH, PHONE]):
+    raise ValueError("Missing one or more required environment variables.")
 
-# Flask app setup
-flask_app = Flask(__name__)
+# === Flask Server Setup ===
+app = Flask(__name__)
 
-@flask_app.route("/", methods=["GET"])
-def index():
-    return "Bot is alive!"
+@app.route('/')
+def home():
+    return "🤖 AI Chat Bot is Running - Visit https://t.me/your_bot to chat!"
 
-@flask_app.route("/webhook", methods=["POST"])
-def webhook():
-    return "Webhook received", 200
+@app.route('/webhook', methods=['POST'])
+async def webhook():
+    data = request.get_json()
+    if not data:
+        return '', 400
+    update = Update.de_json(data, application.bot)
+    await application.update_queue.put(update)
+    return '', 200
 
-# Telethon setup
-telethon_client = TelegramClient("anon", API_ID, API_HASH)
+# === Telegram Client Setup ===
+client = TelegramClient('session_name', API_ID, API_HASH)
 
-# Telegram bot handlers
+# === AI Engine Configuration ===
+ENGINE_CONFIG = {
+    # ... (keep your existing engine config)
+}
+
+# === AI Query Handler ===
+async def query_ai_engine(engine, prompt):
+    # ... (keep your existing query_ai_engine function)
+    pass
+
+# === Collaborative Project Manager ===
+async def manage_collaborative_task(prompt):
+    # ... (keep your existing manage_collaborative_task function)
+    pass
+
+# === Telegram Handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! I'm your AI collab bot.")
+    # ... (keep your existing start function)
+    pass
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(update.message.text)
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ... (keep your existing handle_message function)
+    pass
 
-# Telegram bot setup
-async def run_telegram_bot():
-    application = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .build()
-    )
+async def scrape(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ... (keep your existing scrape function)
+    pass
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+# === Bot Setup ===
+application = None
 
-    print(">> Bot started.")
+async def setup_bot():
+    global application
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CommandHandler('scrape', scrape))
+    
     await application.initialize()
     await application.start()
-    await application.bot.set_webhook(WEBHOOK_URL)
-    print(f">> Webhook set to {WEBHOOK_URL}")
-    await application.updater.start_polling()  # fallback polling if needed
-    await application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=WEBHOOK_URL,
-    )
+    
+    # Set webhook
+    await application.bot.set_webhook(url=WEBHOOK_URL)
+    print(f"Bot is running with webhook at {WEBHOOK_URL}")
 
-# Run everything concurrently
-async def main():
-    print("📡 Flask server running on port", PORT)
-    flask_task = asyncio.create_task(asyncio.to_thread(flask_app.run, host="0.0.0.0", port=PORT))
-    bot_task = asyncio.create_task(run_telegram_bot())
-    await asyncio.gather(flask_task, bot_task)
+async def shutdown_bot():
+    if application:
+        await application.stop()
+        await application.shutdown()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+def run_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(setup_bot())
+    except KeyboardInterrupt:
+        loop.run_until_complete(shutdown_bot())
+    finally:
+        loop.close()
+
+# === Main Execution ===
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    
+    # Run Flask in a separate thread
+    from threading import Thread
+    flask_thread = Thread(target=lambda: app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False))
+    flask_thread.start()
+    
+    # Run the bot in the main thread
+    run_bot()
