@@ -10,7 +10,7 @@ dependencies = [
     "Flask",
     "openai",
     "telegram",
-    "aiohttp",
+    "aiohttp>=3.9.0",
     "telethon",
     "discord.py",
     "matrix-nio[e2e]"
