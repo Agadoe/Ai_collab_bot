@@ -3,10 +3,10 @@ name = "ai-collaboration-bot"
 version = "0.2.0"
 description = "A multi-engine AI chatbot with collaborative capabilities"
 authors = ["Your Name <you@example.com>"]
-requires-python = ">=3.11"
+requires-python = ">=3.11, <3.12"
 dependencies = [
     "nest_asyncio",
-    "python-telegram-bot==20.0",
+    "python-telegram-bot==20.5",
     "Flask",
     "openai",
     "telegram",
