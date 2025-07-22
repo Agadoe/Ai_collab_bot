@@ -12,6 +12,7 @@ from telegram.ext import (
 )
 from telethon import TelegramClient
 from telethon.tl.functions.messages import GetHistoryRequest
+import logging
 
 # === Environment Variables ===
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -28,6 +29,13 @@ PHONE = os.getenv('PHONE')
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is required")
 
+if not WEBHOOK_URL:
+    print("[WARNING] WEBHOOK_URL environment variable is not set! Bot will not receive updates from Telegram.")
+
+# === Logging Setup ===
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # === Flask Server Setup ===
 app = Flask(__name__)
 
@@ -37,15 +45,23 @@ def home():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    logger.info(f"Webhook received: {request.get_json()}")
     if not request.is_json:
         return jsonify({"status": "error", "message": "Request must be JSON"}), 400
-    
-    update = Update.de_json(request.get_json(), application.bot)
-    asyncio.run_coroutine_threadsafe(
-        application.process_update(update),
-        application.update_queue._loop
-    )
-    return jsonify({"status": "success"}), 200
+    try:
+        update = Update.de_json(request.get_json(), application.bot)
+        asyncio.run_coroutine_threadsafe(
+            application.process_update(update),
+            application.update_queue._loop
+        )
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        logger.exception("Error processing webhook update:")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/health')
+def health():
+    return "ok", 200
 
 # === Telegram Client Setup ===
 client = TelegramClient('session_name', API_ID, API_HASH) if API_ID and API_HASH else None
@@ -57,20 +73,27 @@ ENGINE_CONFIG = {
 
 # === AI Query Handler ===
 async def query_ai_engine(engine, prompt):
-    # ... (keep your existing query_ai_engine function)
-    pass
+    # Dummy response for testing
+    return f"Echo: {prompt}"
 
 # === Telegram Handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🌟 Hello! I'm an advanced AI bot with collaborative AI engines.\n"
-        "Send a message or project idea, and we'll work together to perfect it!"
-    )
+    try:
+        await update.message.reply_text(
+            "🌟 Hello! I'm an advanced AI bot with collaborative AI engines.\n"
+            "Send a message or project idea, and we'll work together to perfect it!"
+        )
+    except Exception as e:
+        logger.exception("Error in /start handler:")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    response = await query_ai_engine('openai', user_message)  # Default to OpenAI
-    await update.message.reply_text(response)
+    try:
+        user_message = update.message.text
+        response = await query_ai_engine('openai', user_message)  # Default to OpenAI
+        await update.message.reply_text(response)
+    except Exception as e:
+        logger.exception("Error in message handler:")
+        await update.message.reply_text("Sorry, an error occurred while processing your message.")
 
 # === Bot Initialization ===
 def initialize_bot():
@@ -92,6 +115,8 @@ async def set_webhook():
         url=WEBHOOK_URL,
         drop_pending_updates=True
     )
+    logger.info(f"Webhook set to: {WEBHOOK_URL}")
+    logger.info(f"Bot username: @{(await application.bot.get_me()).username}")
 
 # === Main Execution ===
 if __name__ == '__main__':
@@ -105,8 +130,10 @@ if __name__ == '__main__':
     asyncio.set_event_loop(loop)
     
     # Set webhook
-    loop.run_until_complete(set_webhook())
-    print(f"Webhook set at {WEBHOOK_URL}")
+    if WEBHOOK_URL:
+        loop.run_until_complete(set_webhook())
+    else:
+        logger.warning("WEBHOOK_URL is not set. Bot will not receive updates from Telegram!")
     
     # Run Flask app
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
