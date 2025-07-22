@@ -1,0 +1,5 @@
+setuptools>=65.0.0
+wheel>=0.38.0
+Cython>=0.29.0
+# Build dependencies for aiohttp and cryptography
+cffi>=1.15.0
