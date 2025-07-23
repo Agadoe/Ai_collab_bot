@@ -1,139 +1,76 @@
 import os
-import asyncio
-import aiohttp
-from flask import Flask, request, jsonify
+import logging
+from flask import Flask
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
-    MessageHandler,
     CommandHandler,
+    MessageHandler,
     ContextTypes,
     filters
 )
-from telethon import TelegramClient
-from telethon.tl.functions.messages import GetHistoryRequest
-import logging
 
-# === Environment Variables ===
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-GROQ_API_KEY = os.getenv('GROQ_API_KEY')
-OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
-DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
-XAI_API_KEY = os.getenv('XAI_API_KEY')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
-API_ID = os.getenv('API_ID')
-API_HASH = os.getenv('API_HASH')
-PHONE = os.getenv('PHONE')
+PORT = int(os.environ.get('PORT', 10000))
 
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable is required")
-
-if not WEBHOOK_URL:
-    print("[WARNING] WEBHOOK_URL environment variable is not set! Bot will not receive updates from Telegram.")
-
-# === Logging Setup ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Flask Server Setup ===
+# Flask app for health and home endpoints
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "🤖 AI Chat Bot is Running - Visit https://t.me/your_bot to chat!"
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    logger.info(f"Webhook received: {request.get_json()}")
-    if not request.is_json:
-        return jsonify({"status": "error", "message": "Request must be JSON"}), 400
-    try:
-        update = Update.de_json(request.get_json(), application.bot)
-        asyncio.run_coroutine_threadsafe(
-            application.process_update(update),
-            application.update_queue._loop
-        )
-        return jsonify({"status": "success"}), 200
-    except Exception as e:
-        logger.exception("Error processing webhook update:")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
 @app.route('/health')
 def health():
     return "ok", 200
 
-# === Telegram Client Setup ===
-client = TelegramClient('session_name', API_ID, API_HASH) if API_ID and API_HASH else None
+# Telegram Handlers
 
-# === AI Engine Configuration ===
-ENGINE_CONFIG = {
-    # ... (keep your existing engine config)
-}
-
-# === AI Query Handler ===
-async def query_ai_engine(engine, prompt):
-    # Dummy response for testing
-    return f"Echo: {prompt}"
-
-# === Telegram Handlers ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.message.reply_text(
-            "🌟 Hello! I'm an advanced AI bot with collaborative AI engines.\n"
-            "Send a message or project idea, and we'll work together to perfect it!"
-        )
-    except Exception as e:
-        logger.exception("Error in /start handler:")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        user_message = update.message.text
-        response = await query_ai_engine('openai', user_message)  # Default to OpenAI
-        await update.message.reply_text(response)
-    except Exception as e:
-        logger.exception("Error in message handler:")
-        await update.message.reply_text("Sorry, an error occurred while processing your message.")
-
-# === Bot Initialization ===
-def initialize_bot():
-    global application
+def get_application():
     application = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
-        .updater(None)  # Disable polling since we're using webhooks
         .build()
     )
-    
+
+    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            await update.message.reply_text(
+                "🌟 Hello! I'm an advanced AI bot with collaborative AI engines.\n"
+                "Send a message or project idea, and we'll work together to perfect it!"
+            )
+        except Exception as e:
+            logger.exception("Error in /start handler:")
+
+    async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            user_message = update.message.text
+            response = f"Echo: {user_message}"
+            await update.message.reply_text(response)
+        except Exception as e:
+            logger.exception("Error in message handler:")
+            await update.message.reply_text("Sorry, an error occurred while processing your message.")
+
     application.add_handler(CommandHandler('start', start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
     return application
 
-async def set_webhook():
-    await application.bot.set_webhook(
-        url=WEBHOOK_URL,
+if __name__ == '__main__':
+    # Start Flask in a background thread if you want health endpoints (optional)
+    from threading import Thread
+    Thread(target=lambda: app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)).start()
+
+    # Start the Telegram bot webhook server (this will listen on the same port)
+    application = get_application()
+    logger.info(f"Setting webhook to: {WEBHOOK_URL}")
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=WEBHOOK_URL,
+        allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True
     )
-    logger.info(f"Webhook set to: {WEBHOOK_URL}")
-    logger.info(f"Bot username: @{(await application.bot.get_me()).username}")
-
-# === Main Execution ===
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    
-    # Initialize the bot
-    initialize_bot()
-    
-    # Create a new event loop for the bot
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    # Set webhook
-    if WEBHOOK_URL:
-        loop.run_until_complete(set_webhook())
-    else:
-        logger.warning("WEBHOOK_URL is not set. Bot will not receive updates from Telegram!")
-    
-    # Run Flask app
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
