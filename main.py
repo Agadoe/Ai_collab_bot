@@ -50,10 +50,7 @@ def webhook():
         return jsonify({"status": "error", "message": "Request must be JSON"}), 400
     try:
         update = Update.de_json(request.get_json(), application.bot)
-        asyncio.run_coroutine_threadsafe(
-            application.process_update(update),
-            application.update_queue._loop
-        )
+        asyncio.run(application.process_update(update))
         return jsonify({"status": "success"}), 200
     except Exception as e:
         logger.exception("Error processing webhook update:")
