@@ -1,30 +1,23 @@
 import os
 import asyncio
-import aiohttp
+import logging
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
-    MessageHandler,
     CommandHandler,
+    MessageHandler,
     ContextTypes,
     filters
 )
 from telethon import TelegramClient
 from telethon.tl.functions.messages import GetHistoryRequest
-import logging
 
-# === Environment Variables ===
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-GROQ_API_KEY = os.getenv('GROQ_API_KEY')
-OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
-DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
-XAI_API_KEY = os.getenv('XAI_API_KEY')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 API_ID = os.getenv('API_ID')
 API_HASH = os.getenv('API_HASH')
-PHONE = os.getenv('PHONE')
+PORT = int(os.environ.get('PORT', 10000))
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is required")
@@ -32,11 +25,9 @@ if not BOT_TOKEN:
 if not WEBHOOK_URL:
     print("[WARNING] WEBHOOK_URL environment variable is not set! Bot will not receive updates from Telegram.")
 
-# === Logging Setup ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Flask Server Setup ===
 app = Flask(__name__)
 
 @app.route('/')
@@ -101,10 +92,8 @@ def initialize_bot():
         .updater(None)  # Disable polling since we're using webhooks
         .build()
     )
-    
     application.add_handler(CommandHandler('start', start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
     return application
 
 async def set_webhook():
@@ -118,19 +107,15 @@ async def set_webhook():
 # === Main Execution ===
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    
     # Initialize the bot
     initialize_bot()
-    
     # Create a new event loop for the bot
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
     # Set webhook
     if WEBHOOK_URL:
         loop.run_until_complete(set_webhook())
     else:
         logger.warning("WEBHOOK_URL is not set. Bot will not receive updates from Telegram!")
-    
     # Run Flask app
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
